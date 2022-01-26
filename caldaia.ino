@@ -2,15 +2,6 @@
 //
 // A Arduino program to test the operation of pressure sensors in the TE Connectivity M32 series (I2C versions only)
 //
-// Written: 7/9/2019
-// Rev.: 1.00
-// Changes: First release back to the community. Started with bits of code downloaded from the Arduino forums.
-//
-// The sensor specific characteristics are setup with constants in the beginning of the program.
-// The device page is https://www.te.com/usa-en/product-CAT-BLPS0002.html 4
-// The device data sheet can be found at https://www.te.com/commerce/DocumentDelivery/DDEController?Action=showdoc&DocId=Data+SheeM32B1pdEnglisENG_DS_M32O_B10.pdCAT-BLPS0002 10
-//
-
 #include <Wire.h> // Arduino I2C library
 #include <stdint.h> // Standard C, Allows explicit data type declaration.
 
@@ -92,15 +83,40 @@ void printBinary(int number, uint8_t Length){
   }
 }
 
-// fetch_pressure is a function to do the I2C read and extraction of the three data fields
+
+char* tempToAscii(float temp)
+// convert long to type char and store in variable array ascii
+{
+  char ascii[20];// needs to be this big to hold a type float
+
+  int frac;
+  int rnd;
+
+    rnd = (unsigned int)(temp*1000)%10;
+    frac=(unsigned int)(temp*100)%100;  //get three numbers to the right of the deciaml point.
+    if (rnd>=5) frac=frac+1;
+    itoa((int)temp,ascii,10);           // I changed it to 2 decimal places
+    strcat(ascii,".");
+
+  if (frac<10)  {itoa(0,&ascii[strlen(ascii)],10); }   // if fract < 10 should print .0 fract ie if fract=6 print .06
+
+    itoa(frac,&ascii[strlen(ascii)],10); //put the frac after the deciaml
+    
+  return ascii;
+}
+
+// fetch_i2cdata is a function to do the I2C read and extraction of the three data fields
 //
-byte fetch_pressure(uint16_t &P_dat, uint16_t &T_dat)
+byte fetch_i2cdata(double &pressure, double &temperature)
 {
 byte _status;
 byte Press_H;
 byte Press_L;
 byte Temp_H;
 byte Temp_L;
+
+uint16_t P_dat; // 14 bit pressure data
+uint16_t T_dat; // 11 bit temperature data
 
 Wire.requestFrom(M32Address, static_cast<uint8_t>(4), static_cast<uint8_t>(true)); //Request 4 bytes, 2 pressure/status and 2 temperature
 Press_H = Wire.read();
@@ -127,7 +143,7 @@ Temp_L = (Temp_L >> 5);
 // the correct temperature must take the high part, adding 3 bit on the end, and then the remaining 3 bit on Temp_L
 T_dat = (((uint16_t)Temp_H) << 3) | Temp_L;
 
-
+// debug
 Serial.print("pressure (binary): ");
 printBinary(P_dat, 14);
 Serial.println("\n");
@@ -136,15 +152,34 @@ Serial.print("pressure (dec): ");
 Serial.print(P_dat);
 Serial.println("\n");
 
-Serial.print("temperature(binary): ");
+Serial.print("temperature (binary): ");
 printBinary(T_dat, 11);
 Serial.println("\n");
 
 
-Serial.print("temperature(dec): ");
+Serial.print("temperature (dec): ");
 Serial.print(T_dat);
 Serial.println("\n");
 
+pressure=(static_cast<double>(static_cast<int16_t>(P_dat)-M32ZeroCounts))/static_cast<int16_t>(M32Span)*static_cast<int16_t>(M32FullScaleRange);
+
+// output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
+/* output °C	Digital counts (Dec)	Digital counts
+   0		 512			0x200
+  10		 614			0x266
+  25		 767			0x2FF
+  40		 921			0x399
+  55		1075			0x433 */
+//temperature=(T_dat+50)*2048/200;
+// reversed formula from datasheet as we have count and want temperature
+temperature = ( static_cast<int16_t>(T_dat) * 200 / 2048 ) - 50;
+temperature = T_dat + 50;
+Serial.println(T_dat);
+temperature = (double)798*200;
+Serial.println(temperature);
+
+temperature = 798*200/2048;
+Serial.println(temperature);
 
 
 return _status;
@@ -163,7 +198,7 @@ while (! Serial)
 delay(1);
 }
 
-Serial.println("M32O test");
+Serial.println("M32 test");
 
 }
 
@@ -171,12 +206,11 @@ void loop()
 {
 
 byte _status; // A two bit field indicating the status of the I2C read
-uint16_t P_dat; // 14 bit pressure data
-uint16_t T_dat; // 11 bit temperature data
-float psi;
-float temp;
 
-_status = fetch_pressure(P_dat, T_dat);
+double pressure;
+double temperature;
+
+_status = fetch_i2cdata(pressure, temperature);
 
 switch (_status)
 {
@@ -194,20 +228,11 @@ Serial.println("Error");
 break;
 }
 
-psi=(static_cast<float>(static_cast<int16_t>(P_dat)-M32ZeroCounts))/static_cast<int16_t>(M32Span)*static_cast<int16_t>(M32FullScaleRange);
-Serial.print("psi:");
-Serial.println(psi);
+Serial.print("pressure:");
+Serial.println(pressure);
 
-// output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
-/* output °C	Digital counts (Dec)	Digital counts
-   0		 512			0x200
-  10		 614			0x266
-  25		 767			0x2FF
-  40		 921			0x399
-  55		1075			0x433 */
-temp=(static_cast<int16_t>((static_cast<int16_t>(T_dat)+50)*2048/(150-(-50))));
 Serial.print("°C:");
-Serial.println(temp);
+Serial.println(temperature);
 
 delay(1000);
 
