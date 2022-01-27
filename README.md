@@ -17,7 +17,9 @@ https://www.te.com/commerce/DocumentDelivery/DDEController?Action=showdoc&DocId=
 
 === insttuctions ===
 arduino-cli lib install ArduinoMqttClient
+arduino-cli lib install MQTT -- decidere quale usare
 arduino-cli lib install Ethernet
 arduino-cli lib install "Adafruit SSD1306"
+arduino-cli lib install ArduinoJson
 
 arduino-cli compile caldaia.ino -b arduino:avr:ethernet && arduino-cli upload caldaia --port=/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_USB-Serial_64935343733351E002D0-if00 -b arduino:avr:ethernet && screen /dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_USB-Serial_64935343733351E002D0-if00 115200

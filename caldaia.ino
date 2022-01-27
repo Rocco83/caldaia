@@ -9,6 +9,20 @@
 //
 #include <Wire.h> // Arduino I2C library
 #include <stdint.h> // Standard C, Allows explicit data type declaration.
+#include <SPI.h>
+#include <Ethernet.h>
+#include <ArduinoMqttClient.h>
+
+/*
+ * MQTT settings
+ */
+// it's a public name space, so open the key & secret value.
+// if you want to make a privte one, you should make a private namespace on http://shiftr.io
+#define MQTT_DeviceName "CALDAIA"
+#define MQTT_Key "13c8d66e"
+#define MQTT_Secret "caldaia"
+#define MQTT_topic_Message  "/caldaia"
+
 
 /*
  * M32 sensor characteristics (from the 02/2021 version of the data sheet)
@@ -34,6 +48,29 @@ const int16_t M32ZeroCounts=M32MinScaleCounts;
 /*
  * end of M32 sensor characteristics
  */
+
+/*
+ * Other variables
+ */
+byte mac[] = {
+  // mac = "c a l d a i" in hex
+  0x63, 0x61, 0x6C, 0x64, 0x61, 0x69
+};
+
+char SerialBuf[80];
+String strFromSerial; // saving 1 line string
+String strFromMobileAPP;
+String strLocalIP;
+EthernetClient net;
+IPAddress ip;
+byte ipObtained = false;
+
+
+//MQTTClient client;
+MqttClient mqttClient(net);
+//const char broker[] = "homeassistant.dmz.gonzaga.retaggio.net";
+const char broker[] = "172.16.83.24";
+int port = 1883;
 
 // functions for debugging and printing
 
@@ -83,6 +120,91 @@ char* tempToAscii(float temp)
     
   return ascii;
 }
+
+
+byte initializeEthernet() {
+  Serial.println(F("Trying to configure Ethernet using DHCP"));
+  if (Ethernet.begin(mac) == 0) {
+    //FIXME Serial.print
+    Serial.println(F("Failed to initialize Ethernet using DHCP"));
+
+    if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+
+      Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
+
+    } else if (Ethernet.linkStatus() == LinkOFF) {
+
+      Serial.println(F("Ethernet cable is not connected."));
+    }
+
+    delay(10000);
+  }
+  Serial.println(F("Initialized Ethernet using DHCP"));
+  // assign value to the global value that give me current status
+  if ( checkDhcp() == false ) {
+    Serial.println(F("Failed to configure Ethernet using DHCP"));
+    delay(1000);
+  }
+  ipObtained=true;
+  // dhcp test end
+
+  Serial.println(F("Network configuration succeded"));
+  Serial.print(F("IP address: "));
+  Serial.println(Ethernet.localIP());
+
+  net.begin();
+  Serial.println(F("Network server started"));
+
+  return;
+}
+
+byte checkDhcp() {
+    /*
+     * 0: nothing happened
+     * 1: renew failed
+     * 2: renew success
+     * 3: rebind fail
+     * 4: rebind success
+     */
+    //Serial.println(F("Calling maintain"));
+    ipObtained = Ethernet.maintain();
+    switch( ipObtained ){
+    case 0:
+      return true;
+      break;
+    case 1:
+      return false;
+      break;
+    case 2:
+      return true;
+      break;
+    case 3:
+      return false;
+      break;
+    case 4:
+      return true;
+      break;
+    default:
+      return false;
+      break;
+    }
+}
+
+
+void initializeMQTT() {
+  mqttClient.setId("caldaia");
+  // You can provide a username and password for authentication
+  mqttClient.setUsernamePassword("caldaia", "caldaia");
+  
+  while (!mqttClient.connect(broker, port)) {
+    Serial.print("MQTT connection failed! Error code = ");
+    Serial.println(mqttClient.connectError());
+
+    delay(1000);
+  }
+}
+
+
 
 // fetch_i2cdata is the core function to do the I2C read and extraction of the three data fields
 byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[])
@@ -212,18 +334,23 @@ return _status;
 // setup is the main function to setup the diagnostic serial port and the I2C port
 void setup()
 {
+  // Initialize (wait) the boot of ethernet
+  Ethernet.init(10);  // Most Arduino shields
+  Serial.begin(115200);
+  Wire.begin();
+  // wait until serial port opens for native USB devices
+  // Arduino Uno/Ethernet/Mega does not need it (no CDC serial)
+  while (! Serial)
+  {
+  delay(1);
+  }
 
-Serial.begin(115200);
-Wire.begin();
-// wait until serial port opens for native USB devices
-// Arduino Uno/Ethernet/Mega does not need it (no CDC serial)
-while (! Serial)
-{
-delay(1);
-}
 
-Serial.println("M32 test");
+  // start the Ethernet connection:
+  initializeEthernet();
 
+  // start the MQTT client
+  initializeMQTT();
 }
 
 // main()
@@ -238,6 +365,6 @@ byte rawdata[4];
 _status = fetch_i2cdata(pressure, temperature, rawdata);
 
 
-delay(1000);
+delay(10000);
 
 }
