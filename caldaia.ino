@@ -1,4 +1,3 @@
-// File M32 Sensor MQTT client
 //
 // A Arduino program to send the data (pressure and temperature) from the pressure sensors TE Connectivity M32 series (I2C versions only)
 // Original file for MS4525 pressure sensor
@@ -11,16 +10,17 @@
 #include <stdint.h> // Standard C, Allows explicit data type declaration.
 #include <SPI.h>
 #include <Ethernet.h>
-#include <ArduinoMqttClient.h>
+#include <MQTT.h>
+#include <ArduinoJson.h>
 
 /*
  * MQTT settings
  */
 // it's a public name space, so open the key & secret value.
 // if you want to make a privte one, you should make a private namespace on http://shiftr.io
-#define MQTT_DeviceName "CALDAIA"
-#define MQTT_Key "13c8d66e"
-#define MQTT_Secret "caldaia"
+#define MQTT_DeviceName "arduino_caldaia"
+#define MQTT_Username "caldaia"
+#define MQTT_Password "caldaia"
 #define MQTT_topic_Message  "/caldaia"
 
 
@@ -52,25 +52,31 @@ const int16_t M32ZeroCounts=M32MinScaleCounts;
 /*
  * Other variables
  */
-byte mac[] = {
-  // mac = "c a l d a i" in hex
-  0x63, 0x61, 0x6C, 0x64, 0x61, 0x69
-};
-
+// trick: mac must be "unicast" + "locally administred", eg xE‑xx‑xx‑xx‑xx‑xx
+// mac = "c a l d a i" in hex
+//byte mac[] = {0x63, 0x61, 0x6C, 0x64, 0x61, 0x69};
+const byte mac[] = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
+//byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+/*
 char SerialBuf[80];
 String strFromSerial; // saving 1 line string
 String strFromMobileAPP;
 String strLocalIP;
+*/
 EthernetClient net;
 IPAddress ip;
 byte ipObtained = false;
 
-
 //MQTTClient client;
-MqttClient mqttClient(net);
-//const char broker[] = "homeassistant.dmz.gonzaga.retaggio.net";
-const char broker[] = "172.16.83.24";
-int port = 1883;
+//MqttClient mqttClient(net);
+//MQTTClient mqttClient(256);
+MQTTClient mqttClient;
+const char broker[] = "homeassistant.dmz.gonzaga.retaggio.net";
+//const char broker[] = "172.16.83.24";
+const int port = 1883;
+
+
+
 
 // functions for debugging and printing
 
@@ -96,6 +102,13 @@ void printBinary(int number, uint8_t Length){
     if (bits) for (uint8_t x = (Length - bits); x; x--)Serial.write('0'); // Add the leading zeros
     bits = 0; // clear no need for this any more
     Serial.write((number & 1) ? '1' : '0'); // print the bits in reverse order as we depart the recursive function
+  } else {
+    // corner case, the hex is filled by 0
+    if ( bits == 0 ) {
+      for( int count = 0; count < Length; count++) {
+        Serial.write('0');
+      }
+    }
   }
 }
 
@@ -149,11 +162,29 @@ byte initializeEthernet() {
   // dhcp test end
 
   Serial.println(F("Network configuration succeded"));
-  Serial.print(F("IP address: "));
-  Serial.println(Ethernet.localIP());
 
-  net.begin();
-  Serial.println(F("Network server started"));
+  // is it needed?
+  byte macBuffer[6];  // create a buffer to hold the MAC address
+  Ethernet.MACAddress(macBuffer); // fill the buffer
+  Serial.print(F("MAC: "));
+  for (byte octet = 0; octet < 6; octet++) {
+    Serial.print(macBuffer[octet], HEX);
+    if (octet < 5) {
+      Serial.print(F("-"));
+    }
+  }
+  Serial.println(F("\n"));
+
+  // print your local IP address:
+  Serial.print(F("IP: "));
+  Serial.println(Ethernet.localIP());
+  Serial.print(F("Gateway: "));
+  Serial.println(Ethernet.gatewayIP());
+  Serial.print(F("Subnet: "));
+  Serial.println(Ethernet.subnetMask());
+  Serial.print(F("DNS: "));
+  Serial.println(Ethernet.dnsServerIP());
+  Serial.println();
 
   return;
 }
@@ -190,19 +221,49 @@ byte checkDhcp() {
     }
 }
 
+void mqttConnect() {
+  Serial.print(F("Connecting to MQTT broker: "));
+  Serial.println(broker);
+  Serial.print(F("connecting..."));
 
-void initializeMQTT() {
-  mqttClient.setId("caldaia");
+  while (!mqttClient.connect(MQTT_DeviceName, MQTT_Username, MQTT_Password)) {
+    Serial.print(F("."));
+    delay(1000);
+  }
+
+  Serial.println(F("\nconnected!"));
+
+  mqttClient.subscribe(MQTT_topic_Message);
+  // mqttClient.unsubscribe(MQTT_topic_Message);
+}
+
+void MQTTMessageReceived(String &topic, String &payload) {
+  Serial.println("incoming: " + topic + " - " + payload);
+
+  // Note: Do not use the client in the callback to publish, subscribe or
+  // unsubscribe as it may cause deadlocks when other things arrive while
+  // sending and receiving acknowledgments. Instead, change a global variable,
+  // or push to a queue and handle it in the loop after calling `client.loop()`.
+}
+
+//void initializeMQTT() {
+/*  mqttClient.setId("caldaia");
   // You can provide a username and password for authentication
   mqttClient.setUsernamePassword("caldaia", "caldaia");
   
   while (!mqttClient.connect(broker, port)) {
-    Serial.print("MQTT connection failed! Error code = ");
+    Serial.print(F("MQTT connection failed! Error code = "));
     Serial.println(mqttClient.connectError());
 
     delay(1000);
   }
-}
+*/
+ // Note: Local domain names (e.g. "Computer.local" on OSX) are not supported
+  // by Arduino. You need to set the IP address directly.
+//  mqttClient.begin(broker, net);
+  //mqttClient.onMessage(MQTTMessageReceived);
+//  mqttConnect();
+//}
 
 
 
@@ -263,46 +324,46 @@ T_dat = (((uint16_t)Temp_H) << 3) | Temp_L;
 switch (_status)
 {
 case 0:
-//Serial.println("Ok ");
+//Serial.println(F("Ok "));
 break;
 case 1:
-Serial.println("M32 i2c Busy 01");
+Serial.println(F("M32 i2c Busy 01"));
 break;
 case 2:
-Serial.println("M32 i2c Slate 10");
+Serial.println(F("M32 i2c Slate 10"));
 break;
 default:
-Serial.println("M32 i2c Error 11");
+Serial.println(F("M32 i2c Error 11"));
 break;
 }
 
 // print raw data
-Serial.println("raw data. S: Status, P: Pressure, T: Temperature, x: unused");
-Serial.println("SSPPPPPP PPPPPPPP TTTTTTTT TTTxxxxx");
+Serial.println(F("raw data. S: Status, P: Pressure, T: Temperature, x: unused"));
+Serial.println(F("SSPPPPPP PPPPPPPP TTTTTTTT TTTxxxxx"));
 printBinary(rawdata[0], 8);
-Serial.print(" ");
+Serial.print(F(" "));
 printBinary(rawdata[1], 8);
-Serial.print(" ");
+Serial.print(F(" "));
 printBinary(rawdata[2], 8);
-Serial.print(" ");
+Serial.print(F(" "));
 printBinary(rawdata[3], 8);
-Serial.println("\n");
+Serial.println(F("\n"));
 
 // Print debug data for pressure
-Serial.print("raw pressure (dec count): ");
+Serial.print(F("raw pressure (dec count): "));
 Serial.print(P_dat);
-Serial.print(", ");
-Serial.print("raw pressure (binary): ");
+Serial.print(F(", "));
+Serial.print(F("raw pressure (binary): "));
 printBinary(P_dat, 14);
-Serial.println("\n");
+Serial.println(F("\n"));
 
 // Print debug data for temperature 
-Serial.print("raw temperature (dec count): ");
+Serial.print(F("raw temperature (dec count): "));
 Serial.print(T_dat);
-Serial.print(", ");
-Serial.print("temperature (binary): ");
+Serial.print(F(", "));
+Serial.print(F("temperature (binary): "));
 printBinary(T_dat, 11);
-Serial.println("\n");
+Serial.println(F("\n"));
 
 // make the math on pressure
 // static_cast<double> is needed for each variable to avoid that Arduino decide to make use of int or such
@@ -323,18 +384,19 @@ temperature = ( static_cast<double>(T_dat) * static_cast<double>(200) / static_c
 
 // Finally print converted data
 
-Serial.print("pressure bar: ");
+Serial.print(F("pressure bar: "));
 Serial.println(pressure);
-Serial.print("temperature °C: ");
+Serial.print(F("temperature °C: "));
 Serial.println(temperature);
 
 return _status;
 }
 
+
 // setup is the main function to setup the diagnostic serial port and the I2C port
 void setup()
 {
-  // Initialize (wait) the boot of ethernet
+  // Initialize (pin used) the boot of ethernet
   Ethernet.init(10);  // Most Arduino shields
   Serial.begin(115200);
   Wire.begin();
@@ -350,21 +412,56 @@ void setup()
   initializeEthernet();
 
   // start the MQTT client
-  initializeMQTT();
+  mqttClient.begin(broker, net);
+  //mqttClient.begin("homeassistant.dmz.gonzaga.retaggio.net", net);
+  mqttConnect();
 }
 
 // main()
 void loop()
 {
-// variabled defined here and passed as reference to fetch_i2cdata
-byte _status; // A two bit field indicating the status of the I2C read
-double pressure;
-double temperature;
-byte rawdata[4];
-
-_status = fetch_i2cdata(pressure, temperature, rawdata);
-
-
-delay(10000);
-
+  // variabled defined here and passed as reference to fetch_i2cdata
+  byte _status; // A two bit field indicating the status of the I2C read
+  double pressure;
+  double temperature;
+  byte rawdata[4];
+  // variable for the JSON message to MQTT
+  StaticJsonDocument<200> mqttData;
+  char json_string[200];
+  byte mqttreturn;
+  
+  // get updated data from the sensor
+  _status = fetch_i2cdata(pressure, temperature, rawdata);
+  
+  // write data to mqtt variables
+  mqttData["temperature"] = temperature;
+  mqttData["temperature_unit"] = "°C";
+  
+  mqttData["pressure"] = pressure;
+  mqttData["pressure_unit"] = "°C";
+  
+  JsonArray mqttRawData = mqttData.createNestedArray("mqttRawData");
+  mqttRawData.add(rawdata[0]);
+  mqttRawData.add(rawdata[1]);
+  mqttRawData.add(rawdata[2]);
+  mqttRawData.add(rawdata[3]);
+  
+  serializeJson(mqttData, json_string);
+  
+  Serial.println(F("JSON String:"));
+  Serial.println(json_string);
+  
+  //mqttreturn = mqttClient.publish("/caldaia", json_string);
+  //if ( !mqttreturn ) { Serial.println(F("MQTT send message failed")); }
+  mqttreturn = mqttClient.publish("/caldaia", "debug");
+  if ( !mqttreturn ) { Serial.println(F("MQTT short debug send message failed")); } else { Serial.println(F("MQTT short debug easy string OK")); }
+  
+  //strcpy(json_string, "{\"temperature:22.65625,temperature_unit:°C,pressure:-0.013286,pressure_unit:°C,mqttRawData:[131,201,93,16]}");
+  //strcpy(json_string, "{\"temperature\":23.63281,\"temperature_unit\":\"°C\",\"pressure\":-0.014143,\"pressure_unit\":\"°C\",\"mqttRawData\":[131,199,94,80]}");
+  //strcpy(json_string, "{\"temperature\":23.63281,\"temperature_unit\":\"°C\",\"pressure\":-0.014143,\"pressure_unit\":\"°C\",\"mqttRawData\":[131,199,94,80]}");
+  //strcpy(json_string, "{\"temperature\":23.63281,\"temperature_unit\":\"°C\",\"pressure\":-0.014143,\"pressure_unit\":\"°C\",\"mqttRawData\":131,199,94,80}");
+  strcpy(json_string, "{\"temperature\":23.63281,\"temperature_unit\":\"°C\",\"pressure\":-0.014143,\"pressure_unit\":\"°C\",\"mqttRawData\":[131");
+  mqttreturn = mqttClient.publish("/caldaia", json_string);
+  if ( !mqttreturn ) { Serial.println(F("MQTT long debug send message failed")); } else { Serial.println(F("MQTT long debug easy string OK")); }
+  delay(1000);
 }
