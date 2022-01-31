@@ -119,42 +119,6 @@ char * int2bin(int x)
 double round2(double value) {
    return (int)(value * 100 + 0.5) / 100.0;
 }
-
-/*
-void setup()
-{
-  Serial.begin(115200);
-  for (int x = -10; x < 10; x++) Serial.println(int2bin(x));
-}
-
-void loop()
-{
-}
-*/
-
-// function to write the float/double value to Serial (seems unneeded)
-char* tempToAscii(float temp)
-// convert long to type char and store in variable array ascii
-{
-  char ascii[20];// needs to be this big to hold a type float
-
-  int frac;
-  int rnd;
-
-    rnd = (unsigned int)(temp*1000)%10;
-    frac=(unsigned int)(temp*100)%100;  //get three numbers to the right of the deciaml point.
-    if (rnd>=5) frac=frac+1;
-    itoa((int)temp,ascii,10);           // I changed it to 2 decimal places
-    strcat(ascii,".");
-
-  if (frac<10)  {itoa(0,&ascii[strlen(ascii)],10); }   // if fract < 10 should print .0 fract ie if fract=6 print .06
-
-    itoa(frac,&ascii[strlen(ascii)],10); //put the frac after the deciaml
-    
-  return ascii;
-}
-
-
 byte initializeEthernet() {
   Serial.println(F("Trying to configure Ethernet using DHCP"));
   if (Ethernet.begin(mac) == 0) {
@@ -260,14 +224,14 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
   StaticJsonDocument<BUFFERSIZE-8> mqttData;
   char json_string[BUFFERSIZE-8];
   byte mqttreturn;
-  
+
   // write data to mqtt variables
   mqttData["temperature"] = temperature;
   mqttData["temperature_unit"] = "°C";
-  
+
   mqttData["pressure"] = pressure;
   mqttData["pressure_unit"] = "bar";
-  
+
   mqttData["uptime"] = now;
 
   JsonArray mqttRawData = mqttData.createNestedArray("mqttRawData");
@@ -275,9 +239,9 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
   mqttRawData.add(int2bin(rawdata[1]));
   mqttRawData.add(int2bin(rawdata[2]));
   mqttRawData.add(int2bin(rawdata[3]));
-  
+
   serializeJson(mqttData, json_string);
-  
+
   Serial.print(F("JSON String (len: "));
   Serial.print(strlen(json_string));
   Serial.println(F("):"));
@@ -288,7 +252,7 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
   if ( ! mqttClient.connected() ) {
     mqttConnect();
   }
-  
+
   mqttreturn = mqttClient.publish("/caldaia", json_string);
   if ( !mqttreturn ) {
     Serial.println(F("MQTT send message failed"));
@@ -310,135 +274,134 @@ uint8_t resetStale() {
 
 
 // fetch_i2cdata is the core function to do the I2C read and extraction of the three data fields
-byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[])
-{
-uint8_t buffersize;
-byte _status;
-byte Press_H;
-byte Press_L;
-byte Temp_H;
-byte Temp_L;
+byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[]) {
+  uint8_t buffersize;
+  byte _status;
+  byte Press_H;
+  byte Press_L;
+  byte Temp_H;
+  byte Temp_L;
 
-uint16_t P_dat; // 14 bit pressure data
-uint16_t T_dat; // 11 bit temperature data
+  uint16_t P_dat; // 14 bit pressure data
+  uint16_t T_dat; // 11 bit temperature data
 
-// wake sensor
-// if not performed, 1 reading every 2 is stale
-Wire.requestFrom(M32Address, (uint8_t)0);
+  // wake sensor
+  // if not performed, 1 reading every 2 is stale
+  Wire.requestFrom(M32Address, (uint8_t)0);
 
-// standard time for i2c is 100Khz
-// from the datasheet:
-// Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
-delay(100*1.2);
+  // standard time for i2c is 100Khz
+  // from the datasheet:
+  // Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
+  delay(100*1.2);
 
-// read data
-// the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
-// a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
-buffersize = Wire.requestFrom(M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
-// buffersize = 4 expected, otherwise it's an error
-if ( buffersize != 4 ) {
-  return 4;
-}
-rawdata[0] = Wire.read();
-rawdata[1] = Wire.read();
-rawdata[2] = Wire.read();
-rawdata[3] = Wire.read();
+  // read data
+  // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
+  // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
+  buffersize = Wire.requestFrom(M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
+  // buffersize = 4 expected, otherwise it's an error
+  if ( buffersize != 4 ) {
+    return 4;
+  }
+  rawdata[0] = Wire.read();
+  rawdata[1] = Wire.read();
+  rawdata[2] = Wire.read();
+  rawdata[3] = Wire.read();
 
-// as the variable Press_H/L, Temp_H/L were meant to be modified, have to save the rawdata into another variable
-Press_H = rawdata[0];
-Press_L = rawdata[1];
-Temp_H = rawdata[2];
-Temp_L = rawdata[3];
+  // as the variable Press_H/L, Temp_H/L were meant to be modified, have to save the rawdata into another variable
+  Press_H = rawdata[0];
+  Press_L = rawdata[1];
+  Temp_H = rawdata[2];
+  Temp_L = rawdata[3];
 
-// get the return code, first 2 bit of the first i2c packet
-// 00: OK
-// 01: Reserved
-// 10: Stale
-// 11: Error
-_status = (Press_H >> 6) & 0x03;
+  // get the return code, first 2 bit of the first i2c packet
+  // 00: OK
+  // 01: Reserved
+  // 10: Stale
+  // 11: Error
+  _status = (Press_H >> 6) & 0x03;
 
-// keep in Press_H only the meaningful data for pressure, first byte
-Press_H = Press_H & 0x3f;
-// combine Press_H and Press_L to get the 14 bit precision
-P_dat = (((uint16_t)Press_H) << 8 ) | Press_L; // space added after ‘8’ so code can be uploaded without emoji conversion!
+  // keep in Press_H only the meaningful data for pressure, first byte
+  Press_H = Press_H & 0x3f;
+  // combine Press_H and Press_L to get the 14 bit precision
+  P_dat = (((uint16_t)Press_H) << 8 ) | Press_L; // space added after ‘8’ so code can be uploaded without emoji conversion!
 
-// the low part of the temperature must remove the last 5 bits, as that are always 0 (unused)
-Temp_L = (Temp_L >> 5);
-// the correct temperature must take the high part, adding 3 bit on the end, and then the remaining 3 bit on Temp_L
-T_dat = (((uint16_t)Temp_H) << 3) | Temp_L;
+  // the low part of the temperature must remove the last 5 bits, as that are always 0 (unused)
+  Temp_L = (Temp_L >> 5);
+  // the correct temperature must take the high part, adding 3 bit on the end, and then the remaining 3 bit on Temp_L
+  T_dat = (((uint16_t)Temp_H) << 3) | Temp_L;
 
-// Print the data on Serial for monitoring (unneeded, anyhow)
+  // Print the data on Serial for monitoring (unneeded, anyhow)
 
-switch (_status)
-{
-case 0:
-//Serial.println(F("Ok "));
-break;
-case 1:
-Serial.println(F("M32 i2c Busy 01"));
-break;
-case 2:
-Serial.println(F("M32 i2c Slate 10"));
-resetStale();
-break;
-default:
-Serial.println(F("M32 i2c Error 11"));
-break;
-}
+  switch (_status)
+  {
+  case 0:
+  //Serial.println(F("Ok "));
+  break;
+  case 1:
+  Serial.println(F("M32 i2c Busy 01"));
+  break;
+  case 2:
+  Serial.println(F("M32 i2c Slate 10"));
+  resetStale();
+  break;
+  default:
+  Serial.println(F("M32 i2c Error 11"));
+  break;
+  }
 
-// print raw data
-Serial.println(F("raw data. S: Status, P: Pressure, T: Temperature, x: unused"));
-Serial.println(F("SSPPPPPP PPPPPPPP TTTTTTTT TTTxxxxx"));
-printBinary(rawdata[0], 8);
-Serial.print(F(" "));
-printBinary(rawdata[1], 8);
-Serial.print(F(" "));
-printBinary(rawdata[2], 8);
-Serial.print(F(" "));
-printBinary(rawdata[3], 8);
-Serial.println(F("\n"));
+  // print raw data
+  Serial.println(F("raw data. S: Status, P: Pressure, T: Temperature, x: unused"));
+  Serial.println(F("SSPPPPPP PPPPPPPP TTTTTTTT TTTxxxxx"));
+  printBinary(rawdata[0], 8);
+  Serial.print(F(" "));
+  printBinary(rawdata[1], 8);
+  Serial.print(F(" "));
+  printBinary(rawdata[2], 8);
+  Serial.print(F(" "));
+  printBinary(rawdata[3], 8);
+  Serial.println(F("\n"));
 
-// Print debug data for pressure
-Serial.print(F("raw pressure (dec count): "));
-Serial.print(P_dat);
-Serial.print(F(", "));
-Serial.print(F("raw pressure (binary): "));
-printBinary(P_dat, 14);
-Serial.println(F(""));
+  // Print debug data for pressure
+  Serial.print(F("raw pressure (dec count): "));
+  Serial.print(P_dat);
+  Serial.print(F(", "));
+  Serial.print(F("raw pressure (binary): "));
+  printBinary(P_dat, 14);
+  Serial.println(F(""));
 
-// Print debug data for temperature 
-Serial.print(F("raw temperature (dec count): "));
-Serial.print(T_dat);
-Serial.print(F(", "));
-Serial.print(F("temperature (binary): "));
-printBinary(T_dat, 11);
-Serial.println(F("\n"));
+  // Print debug data for temperature
+  Serial.print(F("raw temperature (dec count): "));
+  Serial.print(T_dat);
+  Serial.print(F(", "));
+  Serial.print(F("temperature (binary): "));
+  printBinary(T_dat, 11);
+  Serial.println(F("\n"));
 
-// make the math on pressure
-// static_cast<double> is needed for each variable to avoid that Arduino decide to make use of int or such
-pressure=round2((static_cast<double>(static_cast<double>(P_dat)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange));
+  // make the math on pressure
+  // static_cast<double> is needed for each variable to avoid that Arduino decide to make use of int or such
+  pressure=round2((static_cast<double>(static_cast<double>(P_dat)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange));
 
-// Original formula in the datasheet
-// output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
-/* output °C	Digital counts (Dec)	Digital counts
-   0		 512			0x200
-  10		 614			0x266
-  25		 767			0x2FF
-  40		 921			0x399
-  55		1075			0x433 */
-// reversed formula from datasheet as we have count and want temperature
-// output °C = ( output (decimal counts) / 2048 * 200 ) - 50
-// without static_cast<double> the values are mocked (eg 798*200 = 28528, while should be 153600
-temperature = round2(( static_cast<double>(T_dat) * static_cast<double>(200) / static_cast<double>(2048) ) - static_cast<double>(50));
+  // Original formula in the datasheet
+  // output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
+  /* output °C	Digital counts (Dec)	Digital counts
+     0		 512			0x200
+    10		 614			0x266
+    25		 767			0x2FF
+    40		 921			0x399
+    55		1075			0x433 */
+  // reversed formula from datasheet as we have count and want temperature
+  // output °C = ( output (decimal counts) / 2048 * 200 ) - 50
+  // without static_cast<double> the values are mocked (eg 798*200 = 28528, while should be 153600
+  temperature = round2(( static_cast<double>(T_dat) * static_cast<double>(200) / static_cast<double>(2048) ) - static_cast<double>(50));
 
-// Finally print converted data
+  // Finally print converted data
 
-Serial.print(F("pressure bar: "));
-Serial.println(pressure);
-Serial.print(F("temperature °C: "));
-Serial.println(temperature);
+  Serial.print(F("pressure bar: "));
+  Serial.println(pressure);
+  Serial.print(F("temperature °C: "));
+  Serial.println(temperature);
 
-return _status;
+  return _status;
 }
 
 
@@ -495,7 +458,7 @@ void loop()
 
   // get updated data from the sensor
   _status = fetch_i2cdata(pressure, temperature, rawdata);
-  
+
   _status = MQTTSend(pressure, temperature, rawdata);
   // watchdog to 8s
   delay(5000-RUNTIME);
