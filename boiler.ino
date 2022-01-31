@@ -20,11 +20,15 @@
  */
 // it's a public name space, so open the key & secret value.
 // if you want to make a privte one, you should make a private namespace on http://shiftr.io
-#define MQTT_DeviceName "arduino_caldaia"
-#define MQTT_Username "caldaia"
-#define MQTT_Password "caldaia"
-#define MQTT_topic_Message  "/caldaia"
+#define MQTT_DeviceName "arduino_boiler"
+#define MQTT_Username "boiler"
+#define MQTT_Password "boiler"
+#define MQTT_topic_Message  "/boiler"
 
+// tested up to 163 chars
+// {"temperature":23.83,"temperature_unit":"°C","pressure":1.11,"pressure_unit":"bar","uptime":4294967000,"mqttRawData":["00000011","11001001","01011110","10000000"]}
+// Sketch uses 32180 bytes (99%) of program storage space. Maximum is 32256 bytes.
+// Global variables use 1063 bytes (51%) of dynamic memory, leaving 985 bytes for local variables. Maximum is 2048 bytes.
 #define BUFFERSIZE 210
 
 
@@ -68,6 +72,7 @@ MQTTClient mqttClient(BUFFERSIZE);
 #define MQTTPORT = 1883
 
 unsigned long now = millis();
+
 
 // time in ms expected to run the sketch
 #define RUNTIME 48
@@ -253,7 +258,7 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
     mqttConnect();
   }
 
-  mqttreturn = mqttClient.publish("/caldaia", json_string);
+  mqttreturn = mqttClient.publish("/boiler", json_string);
   if ( !mqttreturn ) {
     Serial.println(F("MQTT send message failed"));
   } else {
@@ -449,6 +454,9 @@ void loop()
 
   // update the now variable
   now = millis();
+  // temp debug to see if the messages are going through near the end of the uptime
+  //now = 4294967000;
+
   Serial.print(F("\r\n\nCurrent uptime: "));
   Serial.println(now);
 
