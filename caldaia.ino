@@ -12,6 +12,8 @@
 #include <Ethernet.h>
 #include <MQTT.h>
 #include <ArduinoJson.h>
+// for the watchdog
+#include <avr/wdt.h>
 
 /*
  * MQTT settings
@@ -23,7 +25,7 @@
 #define MQTT_Password "caldaia"
 #define MQTT_topic_Message  "/caldaia"
 
-#define BUFFERSIZE 180
+#define BUFFERSIZE 210
 
 
 /*
@@ -65,6 +67,10 @@ MQTTClient mqttClient(BUFFERSIZE);
 #define MQTTBROKER "homeassistant.dmz.gonzaga.retaggio.net"
 #define MQTTPORT = 1883
 
+unsigned long now = millis();
+
+// time in ms expected to run the sketch
+#define RUNTIME 48
 
 // functions for debugging and printing
 
@@ -99,6 +105,32 @@ void printBinary(int number, uint8_t Length){
     }
   }
 }
+
+char * int2bin(int x)
+{
+  static char buffer[9];
+  for (int i=0; i<8; i++) buffer[7-i] = '0' + ((x & (1 << i)) > 0);
+  buffer[8] ='\0';
+  return buffer;
+}
+
+// rounds a number to 2 decimal places
+// example: round(3.14159) -> 3.14
+double round2(double value) {
+   return (int)(value * 100 + 0.5) / 100.0;
+}
+
+/*
+void setup()
+{
+  Serial.begin(115200);
+  for (int x = -10; x < 10; x++) Serial.println(int2bin(x));
+}
+
+void loop()
+{
+}
+*/
 
 // function to write the float/double value to Serial (seems unneeded)
 char* tempToAscii(float temp)
@@ -218,7 +250,7 @@ void mqttConnect() {
     delay(1000);
   }
 
-  Serial.println(F("\nconnected!"));
+  Serial.println(F("\r\nconnected!"));
 
   mqttClient.subscribe(MQTT_topic_Message);
 }
@@ -236,28 +268,46 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
   mqttData["pressure"] = pressure;
   mqttData["pressure_unit"] = "bar";
   
+  mqttData["uptime"] = now;
+
   JsonArray mqttRawData = mqttData.createNestedArray("mqttRawData");
-  mqttRawData.add(rawdata[0]);
-  mqttRawData.add(rawdata[1]);
-  mqttRawData.add(rawdata[2]);
-  mqttRawData.add(rawdata[3]);
+  mqttRawData.add(int2bin(rawdata[0]));
+  mqttRawData.add(int2bin(rawdata[1]));
+  mqttRawData.add(int2bin(rawdata[2]));
+  mqttRawData.add(int2bin(rawdata[3]));
   
   serializeJson(mqttData, json_string);
   
-  Serial.println(F("JSON String:"));
+  Serial.print(F("JSON String (len: "));
+  Serial.print(strlen(json_string));
+  Serial.println(F("):"));
   Serial.println(json_string);
 
   mqttClient.loop();
+
+  if ( ! mqttClient.connected() ) {
+    mqttConnect();
+  }
   
   mqttreturn = mqttClient.publish("/caldaia", json_string);
   if ( !mqttreturn ) {
     Serial.println(F("MQTT send message failed"));
   } else {
-    Serial.println(F("MQTT long debug easy string OK"));
+    Serial.println(F("MQTT send message OK"));
   }
 
   return mqttreturn;
 }
+
+uint8_t resetStale() {
+  // wake sensor
+  // if not performed, 1 reading every 2 is stale
+  Serial.println(F("Read from i2c trying to remove the stale"));
+  delay(100*1.2);
+  return Wire.requestFrom(M32Address, (uint8_t)0);
+  delay(100*1.2);
+}
+
 
 // fetch_i2cdata is the core function to do the I2C read and extraction of the three data fields
 byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[])
@@ -274,7 +324,13 @@ uint16_t T_dat; // 11 bit temperature data
 
 // wake sensor
 // if not performed, 1 reading every 2 is stale
-Wire.requestFrom(0x28, 0);
+Wire.requestFrom(M32Address, (uint8_t)0);
+
+// standard time for i2c is 100Khz
+// from the datasheet:
+// Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
+delay(100*1.2);
+
 // read data
 // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
 // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
@@ -323,6 +379,7 @@ Serial.println(F("M32 i2c Busy 01"));
 break;
 case 2:
 Serial.println(F("M32 i2c Slate 10"));
+resetStale();
 break;
 default:
 Serial.println(F("M32 i2c Error 11"));
@@ -347,7 +404,7 @@ Serial.print(P_dat);
 Serial.print(F(", "));
 Serial.print(F("raw pressure (binary): "));
 printBinary(P_dat, 14);
-Serial.println(F("\n"));
+Serial.println(F(""));
 
 // Print debug data for temperature 
 Serial.print(F("raw temperature (dec count): "));
@@ -359,7 +416,7 @@ Serial.println(F("\n"));
 
 // make the math on pressure
 // static_cast<double> is needed for each variable to avoid that Arduino decide to make use of int or such
-pressure=(static_cast<double>(static_cast<double>(P_dat)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange);
+pressure=round2((static_cast<double>(static_cast<double>(P_dat)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange));
 
 // Original formula in the datasheet
 // output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
@@ -372,7 +429,7 @@ pressure=(static_cast<double>(static_cast<double>(P_dat)-M32ZeroCounts))/static_
 // reversed formula from datasheet as we have count and want temperature
 // output °C = ( output (decimal counts) / 2048 * 200 ) - 50
 // without static_cast<double> the values are mocked (eg 798*200 = 28528, while should be 153600
-temperature = ( static_cast<double>(T_dat) * static_cast<double>(200) / static_cast<double>(2048) ) - static_cast<double>(50);
+temperature = round2(( static_cast<double>(T_dat) * static_cast<double>(200) / static_cast<double>(2048) ) - static_cast<double>(50));
 
 // Finally print converted data
 
@@ -399,15 +456,23 @@ void setup()
   delay(1);
   }
 
+  wdt_reset();
+  // setting up the watchdog for 8 seconds, BEFORE the ethernet initialization
 
   // start the Ethernet connection:
   initializeEthernet();
+
+  // reset the watchdog
+  wdt_reset();
 
   // start the MQTT client
   //mqttClient.begin(broker, net);
   mqttClient.begin(MQTTBROKER, net);
   //mqttClient.begin("homeassistant.dmz.gonzaga.retaggio.net", net);
   mqttConnect();
+
+  // reset the watchdog
+  wdt_reset();
 }
 
 // main()
@@ -419,9 +484,19 @@ void loop()
   double temperature;
   byte rawdata[4];
 
+  // update the now variable
+  now = millis();
+  Serial.print(F("\r\n\nCurrent uptime: "));
+  Serial.println(now);
+
+  // reset the watchdog
+  wdt_reset();
+
+
   // get updated data from the sensor
   _status = fetch_i2cdata(pressure, temperature, rawdata);
   
   _status = MQTTSend(pressure, temperature, rawdata);
-  delay(1000);
+  // watchdog to 8s
+  delay(5000-RUNTIME);
 }
