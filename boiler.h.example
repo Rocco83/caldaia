@@ -1,0 +1,8 @@
+// MQTT variables
+#define MQTT_DeviceName "arduino_boiler"
+#define MQTT_Username "myhome_boiler"
+#define MQTT_Password "verycomplexpassword"
+#define MQTT_topic_Message  "myhome/boiler"
+
+#define MQTTBROKER "mqtt.fqdn.com" // FQDN of the MQTT broker
+#define MQTTPORT 1883

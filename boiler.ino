@@ -14,22 +14,24 @@
 #include <ArduinoJson.h>
 // for the watchdog
 #include <avr/wdt.h>
+// variable for the local project
+#include "boiler.h"
 
 /*
  * MQTT settings
  */
 // it's a public name space, so open the key & secret value.
 // if you want to make a privte one, you should make a private namespace on http://shiftr.io
-#define MQTT_DeviceName "arduino_boiler"
-#define MQTT_Username "boiler"
-#define MQTT_Password "boiler"
-#define MQTT_topic_Message  "/boiler"
+//#define MQTT_DeviceName "arduino_boiler"
+//#define MQTT_Username "boiler"
+//#define MQTT_Password "boiler"
+//#define MQTT_topic_Message  "/boiler"
 
 // tested up to 163 chars
 // {"temperature":23.83,"temperature_unit":"°C","pressure":1.11,"pressure_unit":"bar","uptime":4294967000,"mqttRawData":["00000011","11001001","01011110","10000000"]}
 // Sketch uses 32180 bytes (99%) of program storage space. Maximum is 32256 bytes.
 // Global variables use 1063 bytes (51%) of dynamic memory, leaving 985 bytes for local variables. Maximum is 2048 bytes.
-#define BUFFERSIZE 210
+#define BUFFERSIZE 200
 
 
 /*
@@ -37,21 +39,27 @@
  */
 
 // M32 sensor I2C address
-const uint8_t M32Address PROGMEM = 0x28;
+//const uint8_t M32Address PROGMEM = 0x28;
+#define M32Address 0x28
 
 // M32 sensor full scale range and units
-const int16_t M32FullScaleRange = 6.89476; // 100 psi in bar
+//const int16_t M32FullScaleRange = 6.89476; // 100 psi in bar
+#define M32FullScaleRange 6.89476 // 100 psi in bar
 
 // M32 sensor, see PERFORMANCE SPECIFICATION (DIGITAL). Could be to be adjusted
-const int16_t M32MinScaleCounts PROGMEM = 1000;
-const int16_t M32FullScaleCounts PROGMEM = 15000;
-const int16_t M32Span = M32FullScaleCounts-M32MinScaleCounts;
+//const int16_t M32MinScaleCounts PROGMEM = 1000;
+//const int16_t M32FullScaleCounts PROGMEM = 15000;
+//const int16_t M32Span = M32FullScaleCounts-M32MinScaleCounts;
+#define M32MinScaleCounts 1000
+#define M32FullScaleCounts 15000
+const int16_t M32Span PROGMEM = M32FullScaleCounts-M32MinScaleCounts;
 
 // M32 sensor pressure style, gauge or differential. Comment out the wrong one.
 // Differential
 //const int16_t M32ZeroCounts=(M32MinScaleCounts+M32FullScaleCounts)/2;
 // Absolute, Gauge
-const int16_t M32ZeroCounts = M32MinScaleCounts;
+//const int16_t M32ZeroCounts PROGMEM = M32MinScaleCounts;
+#define M32ZeroCounts M32MinScaleCounts
 
 /*
  * end of M32 sensor characteristics
@@ -61,15 +69,16 @@ const int16_t M32ZeroCounts = M32MinScaleCounts;
  * Other variables
  */
 // trick: mac must be "unicast" + "locally administred", eg xE‑xx‑xx‑xx‑xx‑xx
-const byte mac[] = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
+const byte mac[] PROGMEM = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
 
 EthernetClient net;
 IPAddress ip;
 uint8_t ipObtained = false;
 
 MQTTClient mqttClient(BUFFERSIZE);
-#define MQTTBROKER "homeassistant.dmz.gonzaga.retaggio.net"
-#define MQTTPORT = 1883
+//#define MQTTBROKER "mqtt.example.com"
+//#define MQTTPORT 1883
+//#define MQTTPREFIX "" // define the prefix of the mqtt messages, example the house name
 
 unsigned long now = millis();
 
@@ -78,6 +87,12 @@ unsigned long now = millis();
 #define RUNTIME 48
 
 // functions for debugging and printing
+
+// self reset
+//void(* resetFunc) (void) = 0; //declare reset function @ address 0
+// call it as   resetFunc();  //call reset
+
+
 
 // function to print the bits of a variable
 void printBinary(int number, uint8_t Length){
@@ -125,8 +140,10 @@ double round2(double value) {
    return (int)(value * 100 + 0.5) / 100.0;
 }
 byte initializeEthernet() {
+  byte macBuffer[6];  // create a buffer to hold the MAC address
+
   Serial.println(F("Trying to configure Ethernet using DHCP"));
-  if (Ethernet.begin(mac) == 0) {
+  if (Ethernet.begin(pgm_read_word_near(mac)) == 0) {
     Serial.println(F("Failed to initialize Ethernet using DHCP"));
 
     if (Ethernet.hardwareStatus() == EthernetNoHardware) {
@@ -152,7 +169,6 @@ byte initializeEthernet() {
   Serial.println(F("Network configuration succeded"));
 
   // is it needed?
-  byte macBuffer[6];  // create a buffer to hold the MAC address
   Ethernet.MACAddress(macBuffer); // fill the buffer
   Serial.print(F("MAC: "));
   for (byte octet = 0; octet < 6; octet++) {
@@ -210,12 +226,15 @@ byte checkDhcp() {
 }
 
 void mqttConnect() {
+  uint8_t counter = 0;
+
   Serial.print(F("Connecting to MQTT broker: "));
   Serial.println(MQTTBROKER);
   Serial.print(F("connecting..."));
 
-  while (!mqttClient.connect(MQTT_DeviceName, MQTT_Username, MQTT_Password)) {
+  while (!mqttClient.connect(MQTT_DeviceName, MQTT_Username, MQTT_Password) || counter == 60) {
     Serial.print(F("."));
+    counter++;
     delay(1000);
   }
 
@@ -258,7 +277,7 @@ byte MQTTSend(double &pressure, double &temperature, byte rawdata[]) {
     mqttConnect();
   }
 
-  mqttreturn = mqttClient.publish("/boiler", json_string);
+  mqttreturn = mqttClient.publish(MQTT_topic_Message, json_string);
   if ( !mqttreturn ) {
     Serial.println(F("MQTT send message failed"));
   } else {
@@ -273,7 +292,7 @@ uint8_t resetStale() {
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("Read from i2c trying to remove the stale"));
   delay(100*1.2);
-  return Wire.requestFrom(M32Address, (uint8_t)0);
+  return Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
   delay(100*1.2);
 }
 
@@ -292,7 +311,7 @@ byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[]) {
 
   // wake sensor
   // if not performed, 1 reading every 2 is stale
-  Wire.requestFrom(M32Address, (uint8_t)0);
+  Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
 
   // standard time for i2c is 100Khz
   // from the datasheet:
@@ -302,7 +321,7 @@ byte fetch_i2cdata(double &pressure, double &temperature, byte rawdata[]) {
   // read data
   // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
   // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
-  buffersize = Wire.requestFrom(M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
+  buffersize = Wire.requestFrom((uint8_t)M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
   // buffersize = 4 expected, otherwise it's an error
   if ( buffersize != 4 ) {
     return 4;
@@ -424,8 +443,8 @@ void setup()
   delay(1);
   }
 
-  wdt_reset();
   // setting up the watchdog for 8 seconds, BEFORE the ethernet initialization
+  wdt_enable(WDTO_8S);
 
   // start the Ethernet connection:
   initializeEthernet();
