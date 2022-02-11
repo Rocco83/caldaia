@@ -27,6 +27,13 @@
  * M32 sensor characteristics (from the 02/2021 version of the data sheet)
  */
 
+// Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
+// delay count in milliseconds
+// 100 KHz (standard i2c) = 100000 read / sec, 100 read/millisecond
+// theoretically, 1 read / ms would be just enough, so delay(1)
+// update time: 
+#define I2CPOLLWAIT 100*1.2
+
 // M32 sensor I2C address
 //const uint8_t M32Address PROGMEM = 0x28;
 #define M32Address 0x28
@@ -66,6 +73,16 @@ uint8_t ipObtained = false;
 MQTTClient mqttClient(BUFFERSIZE);
 
 unsigned long now = millis();
+
+
+// variable used for all the functions
+double pressure;
+double temperature;
+uint16_t P_dec;
+uint16_t T_dec;
+byte rawdata[4];
+
+
 
 
 // time in ms expected to run the sketch
@@ -114,6 +131,8 @@ char * int2bin(uint8_t x)
   buffer[8] ='\0';
   return buffer;
 }
+
+void(* resetFunc) (void) = 0;//declare reset function at address 0
 
 
 // rounds a number to 2 decimal places
@@ -223,7 +242,8 @@ void mqttConnect() {
   //mqttClient.subscribe(MQTT_topic_Message);
 }
 
-byte MQTTSend(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
+//byte MQTTSend(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
+byte MQTTSend() {
   // variable for the JSON message to MQTT
   StaticJsonDocument<BUFFERSIZE-8> mqttData;
   char json_string[BUFFERSIZE-8];
@@ -277,13 +297,14 @@ uint8_t resetStale() {
   // wake sensor
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("Read from i2c, try to remove the stale"));
-  delay(100*1.2);
+  delay(I2CPOLLWAIT);
   return Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
 }
 
 
 // fetch_i2cdata is the core function to do the I2C read and extraction of the three data fields
-byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
+//byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
+byte fetch_i2cdata() {
   uint8_t buffersize;
   byte _status;
   byte Press_H;
@@ -299,29 +320,36 @@ byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint1
   // wake sensor
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("w"));
+  delay(I2CPOLLWAIT);
   Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
   wdt_reset();
-
-  // standard time for i2c is 100Khz
-  // from the datasheet:
-  // Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
-  delay(100*1.2);
 
   // read data
   // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
   // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
-  Serial.println(F("r"));
+  Serial.println(F("rf"));
+  delay(I2CPOLLWAIT);
   buffersize = Wire.requestFrom((uint8_t)M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
   wdt_reset();
   // buffersize = 4 expected, otherwise it's an error
   if ( buffersize != 4 ) {
-    Serial.print(F("Returned a wrong number of bytes: "));
+    Serial.print(F("Returned a wrong number of bytes (resetting): "));
     Serial.println(buffersize);
-    return buffersize;
+    //return 1;
+    Serial.flush();
+    resetFunc();
   }
+  Serial.println(F("r1"));
+  delay(I2CPOLLWAIT);
   rawdata[0] = Wire.read();
+  Serial.println(F("r2"));
+  delay(I2CPOLLWAIT);
   rawdata[1] = Wire.read();
+  Serial.println(F("r3"));
+  delay(I2CPOLLWAIT);
   rawdata[2] = Wire.read();
+  Serial.println(F("r4"));
+  delay(I2CPOLLWAIT);
   rawdata[3] = Wire.read();
 
   // as the variable Press_H/L, Temp_H/L were meant to be modified, have to save the rawdata into another variable
@@ -359,6 +387,7 @@ byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint1
       Serial.println(F("M32 i2c Slate 10"));
       resetStale();
       // continue with the reading that was used
+      _status = 0;
       break;
     default:
       Serial.println(F("M32 i2c Error 11"));
@@ -403,7 +432,7 @@ byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint1
 
   // make the math on pressure
   // static_cast<double> is needed for each variable to avoid that Arduino decide to make use of int or such
-  pressure=round2((static_cast<double>(static_cast<double>(P_dec)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange));
+  pressure = round2((static_cast<double>(static_cast<double>(P_dec)-M32ZeroCounts))/static_cast<double>(M32Span)*static_cast<double>(M32FullScaleRange));
 
   // Original formula in the datasheet
   // output (decimal counts) = ( output °C + 50°C ) * 2048 / (150°C - (-50°C))
@@ -452,25 +481,40 @@ void setup()
   // setting up the watchdog for 8 seconds, BEFORE the ethernet initialization
   wdt_enable(WDTO_8S);
 
-  // start the Ethernet connection:
-  initializeEthernet();
+  // reset the i2c bus
+  /* below
+  Wire.beginTransmission((uint8_t)M32Address);
+  byte busStatus = Wire.endTransmission();
+  if(busStatus != 0x00)
+  {
+      //Bus fault or slave fault
+  }*/
 
   // reset the watchdog
   wdt_reset();
+
+  // verify if the sensor is connected
+  // increase by 514 bytes the flash usage
+  // reset the i2c bus
+  delay(I2CPOLLWAIT);
+  Wire.beginTransmission((uint8_t)M32Address);
+  byte busStatus = Wire.endTransmission();
+  if(busStatus != 0x00) {
+  //if ( ! Wire.endTransmission() ) {
+    // can use SRAM as the Flash is almost full, and after setup() is cleared?
+    Serial.println(F("Missing i2c device"));
+    Serial.flush();
+    delay(1000);
+    resetFunc();
+  }
+
+  // start the Ethernet connection:
+  initializeEthernet();
 
   // start the MQTT client
   mqttClient.begin(MQTTBROKER, net);
   mqttConnect();
 
-  // verify if the sensor is connected
-  // increase by 514 bytes the flash usage
-  /*
-  Wire.beginTransmission((uint8_t)M32Address);
-  if ( ! Wire.endTransmission() ) {
-    // use SRAM as the Flash is almost full, and after setup() is cleared.
-    //Serial.println("");
-  }
-  */
 
   // reset the watchdog
   wdt_reset();
@@ -481,12 +525,12 @@ void loop()
 {
   // variabled defined here and passed as reference to fetch_i2cdata
   //byte _status; // A two bit field indicating the status of the I2C read
-  double pressure;
+/*  double pressure;
   double temperature;
   uint16_t P_dec;
   uint16_t T_dec;
   byte rawdata[4];
-
+*/
   // update the now variable
   now = millis();
   // temp debug to see if the messages are going through near the end of the uptime
@@ -501,7 +545,8 @@ void loop()
 
   // get updated data from the sensor
   // function return not parsed
-  if ( fetch_i2cdata(pressure, temperature, P_dec, T_dec, rawdata) != 0 ) {
+  //if ( fetch_i2cdata(pressure, temperature, P_dec, T_dec, rawdata) != 0 ) {
+  if ( fetch_i2cdata() != 0 ) {
     return;
   }
   // if return != 0, i2c failed (not anymore the original scope for the varuable)
@@ -509,7 +554,8 @@ void loop()
 
   // function return not parsed
   //MQTTSend(pressure, temperature, P_dec, T_dec, rawdata);
+  MQTTSend();
   // watchdog to 8s
   //delay(1000-RUNTIME);
-  delay(800);
+  delay(500);
 }
