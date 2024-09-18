@@ -13,7 +13,7 @@
 #include <MQTT.h>
 #include <ArduinoJson.h>
 // for the watchdog
-#include <avr/wdt.h>
+//#include <avr/wdt.h>
 // variable for the local project
 #include "boiler.h"
 
@@ -64,7 +64,8 @@ const int16_t M32Span PROGMEM = M32FullScaleCounts-M32MinScaleCounts;
  * Other variables
  */
 // trick: mac must be "unicast" + "locally administred", eg xE‑xx‑xx‑xx‑xx‑xx
-const byte mac[] = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
+//const byte mac[] = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
+byte mac[] = {0x6E, 0x61, 0x6C, 0x64, 0x61, 0x69};
 
 EthernetClient net;
 IPAddress ip;
@@ -91,7 +92,6 @@ byte rawdata[4];
 // functions for debugging and printing
 
 // function to print the bits of a variable
-/* debug
 void printBinary(int number, uint8_t Length){
   static int bits;
   if ( bits > 64 ) {
@@ -122,7 +122,6 @@ void printBinary(int number, uint8_t Length){
     }
   }
 }
-*/
 
 char * int2bin(uint8_t x)
 {
@@ -155,6 +154,7 @@ byte initializeEthernet() {
     }
 
     delay(10000);
+    resetFunc();
   }
   Serial.println(F("DHCP init OK"));
   // assign value to the global value that give me current status
@@ -190,7 +190,7 @@ byte initializeEthernet() {
   Serial.println(Ethernet.dnsServerIP());
   Serial.println();
 
-  return;
+  return 0;
 }
 
 byte checkDhcp() {
@@ -297,7 +297,7 @@ uint8_t resetStale() {
   // wake sensor
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("Read from i2c, try to remove the stale"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   return Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
 }
 
@@ -320,17 +320,17 @@ byte fetch_i2cdata() {
   // wake sensor
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("w"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
-  wdt_reset();
+  //wdt_reset();
 
   // read data
   // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
   // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
   Serial.println(F("rf"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   buffersize = Wire.requestFrom((uint8_t)M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
-  wdt_reset();
+  //wdt_reset();
   // buffersize = 4 expected, otherwise it's an error
   if ( buffersize != 4 ) {
     Serial.print(F("Returned a wrong number of bytes (resetting): "));
@@ -340,16 +340,17 @@ byte fetch_i2cdata() {
     resetFunc();
   }
   Serial.println(F("r1"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   rawdata[0] = Wire.read();
+  Serial.println(rawdata[0]);
   Serial.println(F("r2"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   rawdata[1] = Wire.read();
   Serial.println(F("r3"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   rawdata[2] = Wire.read();
   Serial.println(F("r4"));
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   rawdata[3] = Wire.read();
 
   // as the variable Press_H/L, Temp_H/L were meant to be modified, have to save the rawdata into another variable
@@ -469,8 +470,8 @@ void setup()
   Wire.begin();
   // https://forum.arduino.cc/t/i2c-e-pullup-resistor/129142/4
   // Se l'I2C è a 5V puoi anche lasciarle attive, 30 k in parallelo a 4.7k hanno un effetto minimo, se l'I2C è a 3.3V allora devi disabilitare le pull up interne usando le due righe che ti ha postato PaoloP.
-  digitalWrite(SDA, 0);
-  digitalWrite(SCL, 0);
+  //digitalWrite(SDA, 0);
+  //digitalWrite(SCL, 0);
   // wait until serial port opens for native USB devices
   // Arduino Uno/Ethernet/Mega does not need it (no CDC serial)
   while (! Serial)
@@ -479,7 +480,7 @@ void setup()
   }
 
   // setting up the watchdog for 8 seconds, BEFORE the ethernet initialization
-  wdt_enable(WDTO_8S);
+  //wdt_enable(WDTO_8S);
 
   // reset the i2c bus
   /* below
@@ -491,12 +492,12 @@ void setup()
   }*/
 
   // reset the watchdog
-  wdt_reset();
+  //wdt_reset();
 
   // verify if the sensor is connected
   // increase by 514 bytes the flash usage
   // reset the i2c bus
-  delay(I2CPOLLWAIT);
+  //delay(I2CPOLLWAIT);
   Wire.beginTransmission((uint8_t)M32Address);
   byte busStatus = Wire.endTransmission();
   if(busStatus != 0x00) {
@@ -504,7 +505,7 @@ void setup()
     // can use SRAM as the Flash is almost full, and after setup() is cleared?
     Serial.println(F("Missing i2c device"));
     Serial.flush();
-    delay(1000);
+    delay(10000);
     resetFunc();
   }
 
@@ -517,7 +518,7 @@ void setup()
 
 
   // reset the watchdog
-  wdt_reset();
+  //wdt_reset();
 }
 
 // main()
@@ -540,7 +541,7 @@ void loop()
   Serial.println(now);
 
   // reset the watchdog
-  wdt_reset();
+  //wdt_reset();
 
 
   // get updated data from the sensor
@@ -550,7 +551,7 @@ void loop()
     return;
   }
   // if return != 0, i2c failed (not anymore the original scope for the varuable)
-  wdt_reset();
+  //wdt_reset();
 
   // function return not parsed
   //MQTTSend(pressure, temperature, P_dec, T_dec, rawdata);
