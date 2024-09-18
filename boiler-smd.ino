@@ -14,6 +14,8 @@
 #include <ArduinoJson.h>
 // for the watchdog
 //#include <avr/wdt.h>
+// Arduino R4
+#include <WDT.h>
 // variable for the local project
 #include "boiler.h"
 
@@ -54,6 +56,7 @@ const int16_t M32Span PROGMEM = M32FullScaleCounts-M32MinScaleCounts;
 //const int16_t M32ZeroCounts=(M32MinScaleCounts+M32FullScaleCounts)/2;
 // Absolute, Gauge
 //const int16_t M32ZeroCounts = M32MinScaleCounts;
+// Absolute, but doing by #define
 #define M32ZeroCounts M32MinScaleCounts
 
 /*
@@ -73,10 +76,16 @@ uint8_t ipObtained = false;
 
 MQTTClient mqttClient(BUFFERSIZE);
 
+// watchdog related, set 5 sec as timeout
+//#define wdtInterval 5000
+// UNO R4 min wdtInterval 1ms / max wdtInterval 5592ms
+const long wdtInterval = 5592;
+
+
 unsigned long now = millis();
 
 
-// variable used for all the functions
+// global variable used for all the functions
 double pressure;
 double temperature;
 uint16_t P_dec;
@@ -95,7 +104,7 @@ byte rawdata[4];
 void printBinary(int number, uint8_t Length){
   static int bits;
   if ( bits > 64 ) {
-    // bits cant reach 64
+    // bits can't reach 64
     Serial.print(F("64 loops done, failed. bits:"));
     Serial.print(bits);
     Serial.print(F(" lenght: "));
@@ -131,7 +140,9 @@ char * int2bin(uint8_t x)
   return buffer;
 }
 
-void(* resetFunc) (void) = 0;//declare reset function at address 0
+// declare reset function at address 0
+// calling this trigger a *soft* reset
+void(* resetFunc) (void) = 0;
 
 
 // rounds a number to 2 decimal places
@@ -139,6 +150,8 @@ void(* resetFunc) (void) = 0;//declare reset function at address 0
 double round2(double value) {
    return (int)(value * 100 + 0.5) / 100.0;
 }
+
+// initialize the ethernet from setup()
 byte initializeEthernet() {
   Serial.println(F("DHCP init"));
   if (Ethernet.begin(mac) == 0) {
@@ -153,7 +166,7 @@ byte initializeEthernet() {
       Serial.println(F("Ethernet cable not connected"));
     }
 
-    delay(10000);
+    delay(5000);
     resetFunc();
   }
   Serial.println(F("DHCP init OK"));
@@ -161,6 +174,7 @@ byte initializeEthernet() {
   if ( checkDhcp() == false ) {
     Serial.println(F("DHCP config failed"));
     delay(1000);
+    resetFunc();
   }
   ipObtained=true;
   // dhcp test end
@@ -174,7 +188,7 @@ byte initializeEthernet() {
   for (byte octet = 0; octet < 6; octet++) {
     Serial.print(macBuffer[octet], HEX);
     if (octet < 5) {
-      Serial.print(F("-"));
+      Serial.print(F(":"));
     }
   }
   Serial.println(F("\n"));
@@ -229,6 +243,7 @@ void mqttConnect() {
   Serial.print(F("Connecting to MQTT broker: "));
   Serial.println(MQTTBROKER);
 
+  // watchdog shall come in play and make a full reset
   while (!mqttClient.connect(MQTT_DeviceName, MQTT_Username, MQTT_Password)) {
   //while (!mqttClient.connect(MQTT_DeviceName, MQTT_Username, MQTT_Password) || counter == 60) {
     Serial.print(F("."));
@@ -242,7 +257,6 @@ void mqttConnect() {
   //mqttClient.subscribe(MQTT_topic_Message);
 }
 
-//byte MQTTSend(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
 byte MQTTSend() {
   // variable for the JSON message to MQTT
   StaticJsonDocument<BUFFERSIZE-8> mqttData;
@@ -296,7 +310,7 @@ byte MQTTSend() {
 uint8_t resetStale() {
   // wake sensor
   // if not performed, 1 reading every 2 is stale
-  Serial.println(F("Read from i2c, try to remove the stale"));
+  Serial.println(F("Read from i2c, try to remove the stale (requestFrom)"));
   //delay(I2CPOLLWAIT);
   return Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
 }
@@ -306,7 +320,8 @@ uint8_t resetStale() {
 //byte fetch_i2cdata(double &pressure, double &temperature, uint16_t &P_dec, uint16_t &T_dec, byte rawdata[]) {
 byte fetch_i2cdata() {
   uint8_t buffersize;
-  byte _status;
+  // A two bit field indicating the status of the I2C read
+  byte i2c_status;
   byte Press_H;
   byte Press_L;
   byte Temp_H;
@@ -319,37 +334,43 @@ byte fetch_i2cdata() {
 
   // wake sensor
   // if not performed, 1 reading every 2 is stale
-  Serial.println(F("w"));
+  Serial.println(F("i2c: wake sensor (requestFrom)"));
   //delay(I2CPOLLWAIT);
   Wire.requestFrom((uint8_t)M32Address, (uint8_t)0);
   //wdt_reset();
+  WDT.refresh();
 
   // read data
   // the casting is needed because Wire.requestFrom require int OR uint_8t, not a mix of such
   // a previous version was asking also for stop=true, but is creating Stale issue along with the above wake sensor
-  Serial.println(F("rf"));
+  Serial.println(F("i2c: read real data (requestFrom)"));
   //delay(I2CPOLLWAIT);
   buffersize = Wire.requestFrom((uint8_t)M32Address, static_cast<uint8_t>(4)); //Request 4 bytes, 2 pressure/status and 2 temperature
   //wdt_reset();
+  WDT.refresh();
   // buffersize = 4 expected, otherwise it's an error
   if ( buffersize != 4 ) {
     Serial.print(F("Returned a wrong number of bytes (resetting): "));
     Serial.println(buffersize);
     //return 1;
     Serial.flush();
+    // check if working
     resetFunc();
   }
-  Serial.println(F("r1"));
+
+  // the buffersize is 4, therefore we need to read from Wire 4 times
+  // rawdata[] is needed to print out the data afterward
+  Serial.println(F("read i2c byte 1/4"));
   //delay(I2CPOLLWAIT);
   rawdata[0] = Wire.read();
   Serial.println(rawdata[0]);
-  Serial.println(F("r2"));
+  Serial.println(F("read i2c byte 2/4"));
   //delay(I2CPOLLWAIT);
   rawdata[1] = Wire.read();
-  Serial.println(F("r3"));
+  Serial.println(F("read i2c byte 3/4"));
   //delay(I2CPOLLWAIT);
   rawdata[2] = Wire.read();
-  Serial.println(F("r4"));
+  Serial.println(F("read i2c byte 4/4"));
   //delay(I2CPOLLWAIT);
   rawdata[3] = Wire.read();
 
@@ -364,7 +385,7 @@ byte fetch_i2cdata() {
   // 01: Reserved
   // 10: Stale
   // 11: Error
-  _status = (Press_H >> 6) & 0x03;
+  i2c_status = (Press_H >> 6) & 0x03;
 
   // keep in Press_H only the meaningful data for pressure, first byte
   Press_H = Press_H & 0x3f;
@@ -377,7 +398,7 @@ byte fetch_i2cdata() {
   T_dec = (((uint16_t)Temp_H) << 3) | Temp_L;
 
   // Print the data on Serial for monitoring (unneeded, anyhow)
-  switch (_status) {
+  switch (i2c_status) {
     case 0:
       //Serial.println(F("Ok "));
       break;
@@ -385,29 +406,25 @@ byte fetch_i2cdata() {
       Serial.println(F("M32 i2c Busy 01"));
       break;
     case 2:
-      Serial.println(F("M32 i2c Slate 10"));
+      Serial.println(F("M32 i2c Stale 10"));
       resetStale();
       // continue with the reading that was used
-      _status = 0;
+      i2c_status = 0;
       break;
     default:
       Serial.println(F("M32 i2c Error 11"));
       break;
   }
 
-  // print raw data
+  // print raw data on serial
   Serial.println(F("raw data. S: Status, P: Pressure, T: Temperature, x: unused"));
   Serial.println(F("SSPPPPPP PPPPPPPP TTTTTTTT TTTxxxxx"));
-  //printBinary(rawdata[0], 8);
   Serial.print(int2bin(rawdata[0]));
   Serial.print(F(" "));
-  //printBinary(rawdata[1], 8);
   Serial.print(int2bin(rawdata[1]));
   Serial.print(F(" "));
-  //printBinary(rawdata[2], 8);
   Serial.print(int2bin(rawdata[2]));
   Serial.print(F(" "));
-  //printBinary(rawdata[3], 8);
   Serial.print(int2bin(rawdata[3]));
   Serial.println(F("\n"));
 
@@ -449,21 +466,19 @@ byte fetch_i2cdata() {
   temperature = round2(( static_cast<double>(T_dec) * static_cast<double>(200) / static_cast<double>(2048) ) - static_cast<double>(50));
 
   // Finally print converted data
-
   Serial.print(F("pressure bar: "));
   Serial.println(pressure);
   Serial.print(F("temperature °C: "));
   Serial.println(temperature);
 
   Serial.print(F("status: "));
-  Serial.println(_status);
-  return _status;
+  Serial.println(i2c_status);
+  return i2c_status;
 }
 
 
 // setup is the main function to setup the diagnostic serial port and the I2C port
-void setup()
-{
+void setup() {
   // Initialize (pin used) the boot of ethernet
   Ethernet.init(10);  // Most Arduino shields
   Serial.begin(115200);
@@ -474,13 +489,25 @@ void setup()
   //digitalWrite(SCL, 0);
   // wait until serial port opens for native USB devices
   // Arduino Uno/Ethernet/Mega does not need it (no CDC serial)
-  while (! Serial)
-  {
-  delay(1);
+
+  // This imply that without serial connection the software does not start?
+  while (! Serial) {
+    delay(1);
   }
 
   // setting up the watchdog for 8 seconds, BEFORE the ethernet initialization
   //wdt_enable(WDTO_8S);
+  if(WDT.begin(wdtInterval)) {
+    Serial.print("WDT interval: ");
+    WDT.refresh();
+    Serial.print(WDT.getTimeout());
+    WDT.refresh();
+    Serial.println(" ms");
+    WDT.refresh();
+  } else {
+    Serial.println("Error initializing watchdog");
+    while(1){}
+  }
 
   // reset the i2c bus
   /* below
@@ -493,17 +520,25 @@ void setup()
 
   // reset the watchdog
   //wdt_reset();
+  WDT.refresh();
 
   // verify if the sensor is connected
+
+  // with tca-4307
+  // EN - This is the Enable input pin. Allows you to disconnect the in and out sides when pulled low
+  // RDY - This is the Ready output pin. It will let you know if the peripheral is buffer-connected to the controller (and is safe to attempt communication).
+
+
   // increase by 514 bytes the flash usage
   // reset the i2c bus
+  // why the delay is commented?
   //delay(I2CPOLLWAIT);
   Wire.beginTransmission((uint8_t)M32Address);
   byte busStatus = Wire.endTransmission();
   if(busStatus != 0x00) {
   //if ( ! Wire.endTransmission() ) {
     // can use SRAM as the Flash is almost full, and after setup() is cleared?
-    Serial.println(F("Missing i2c device"));
+    Serial.println(F("Missing i2c device. Sleeping 10s and resetting."));
     Serial.flush();
     delay(10000);
     resetFunc();
@@ -519,19 +554,12 @@ void setup()
 
   // reset the watchdog
   //wdt_reset();
+  WDT.refresh();
 }
 
 // main()
 void loop()
 {
-  // variabled defined here and passed as reference to fetch_i2cdata
-  //byte _status; // A two bit field indicating the status of the I2C read
-/*  double pressure;
-  double temperature;
-  uint16_t P_dec;
-  uint16_t T_dec;
-  byte rawdata[4];
-*/
   // update the now variable
   now = millis();
   // temp debug to see if the messages are going through near the end of the uptime
@@ -542,6 +570,7 @@ void loop()
 
   // reset the watchdog
   //wdt_reset();
+  WDT.refresh();
 
 
   // get updated data from the sensor
@@ -552,11 +581,13 @@ void loop()
   }
   // if return != 0, i2c failed (not anymore the original scope for the varuable)
   //wdt_reset();
+  WDT.refresh();
 
   // function return not parsed
   //MQTTSend(pressure, temperature, P_dec, T_dec, rawdata);
   MQTTSend();
   // watchdog to 8s
   //delay(1000-RUNTIME);
+  // TODO Fix the code?
   delay(500);
 }
