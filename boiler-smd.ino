@@ -29,7 +29,8 @@
  * M32 sensor characteristics (from the 02/2021 version of the data sheet)
  */
 
-// Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time.
+// datasheet 1.6.1:
+// "Users  that  use  “status  bit”  polling  should  select  a  frequency  slower  than  20%  more  than  the  update  time."
 // delay count in milliseconds
 // 100 KHz (standard i2c) = 100000 read / sec, 100 read/millisecond
 // theoretically, 1 read / ms would be just enough, so delay(1)
@@ -101,6 +102,7 @@ byte rawdata[4];
 // functions for debugging and printing
 
 // function to print the bits of a variable
+// TODO currently used only in debug sections
 void printBinary(int number, uint8_t Length){
   static int bits;
   if ( bits > 64 ) {
@@ -116,14 +118,18 @@ void printBinary(int number, uint8_t Length){
     return;
   }
   Serial.flush();
-  if (number) { //The remaining bits have a value greater than zero continue
+  /* number (hex) is the real data to be converted in 1 and 0
+   * this is called recursively, when 0 is hitted it means that all the remaining bits are 0
+   */
+  if (number) {
     bits++; // Count the number of bits so we know how many leading zeros to print first
     printBinary(number >> 1, Length); // Remove a bit and do a recursive call this function.
     if (bits) for (uint8_t x = (Length - bits); x; x--) Serial.write('0'); // Add the leading zeros
     bits = 0; // clear no need for this any more
     Serial.write((number & 1) ? '1' : '0'); // print the bits in reverse order as we depart the recursive function
   } else {
-    // corner case, the hex is filled by 0
+    // corner case, number (hex) is filled by 0
+    // print all the remaining numbers with 0 for padding
     if ( bits == 0 ) {
       for( int count = 0; count < Length; count++) {
         Serial.write('0');
@@ -332,6 +338,8 @@ byte fetch_i2cdata() {
   P_dec = 0;
   T_dec = 0;
 
+
+
   // wake sensor
   // if not performed, 1 reading every 2 is stale
   Serial.println(F("i2c: wake sensor (requestFrom)"));
@@ -483,13 +491,17 @@ void setup() {
   Ethernet.init(10);  // Most Arduino shields
   Serial.begin(115200);
   Wire.begin();
+  // https://www.arduino.cc/reference/en/language/functions/communication/wire/setwiretimeout/
+  Wire.setWireTimeout(2000 /* us */, true /* reset_on_timeout */);
+
   // https://forum.arduino.cc/t/i2c-e-pullup-resistor/129142/4
   // Se l'I2C è a 5V puoi anche lasciarle attive, 30 k in parallelo a 4.7k hanno un effetto minimo, se l'I2C è a 3.3V allora devi disabilitare le pull up interne usando le due righe che ti ha postato PaoloP.
   //digitalWrite(SDA, 0);
   //digitalWrite(SCL, 0);
+  // TODO how does this relate with the 4.7KOhm requested as it is open-drain in M32JM?
+
   // wait until serial port opens for native USB devices
   // Arduino Uno/Ethernet/Mega does not need it (no CDC serial)
-
   // This imply that without serial connection the software does not start?
   while (! Serial) {
     delay(1);
@@ -522,13 +534,13 @@ void setup() {
   //wdt_reset();
   WDT.refresh();
 
-  // verify if the sensor is connected
-
   // with tca-4307
   // EN - This is the Enable input pin. Allows you to disconnect the in and out sides when pulled low
   // RDY - This is the Ready output pin. It will let you know if the peripheral is buffer-connected to the controller (and is safe to attempt communication).
 
 
+  // verify if the sensor is connected
+  // this is a write operation, readFrom does not require beginTransmission and endTransmission
   // increase by 514 bytes the flash usage
   // reset the i2c bus
   // why the delay is commented?
@@ -543,6 +555,7 @@ void setup() {
     delay(10000);
     resetFunc();
   }
+
 
   // start the Ethernet connection:
   initializeEthernet();
