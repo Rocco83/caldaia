@@ -53,4 +53,4 @@ You need to adjust the `#define MQTTBROKER` with your FQDN to be used.
 
 ### Compile instructions
 This is mainly how to compile it for the specific arduino used in this project. Feel free to adapt it.
-`arduino-cli compile boiler.ino -b arduino:avr:ethernet && arduino-cli upload boiler --port=/dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_USB-Serial_64935343733351E002D0-if00 -b arduino:avr:ethernet && screen -L -Logfile ~/logs/arduino-$(date +%Y%m%d-%H%M%S).log /dev/serial/by-id/usb-Arduino__www.arduino.cc__Arduino_USB-Serial_64935343733351E002D0-if00 115200`
+`arduino-cli compile boiler-smd.ino -j0 -b arduino:renesas_uno:minima && ex=1 ; while [[ $ex -ne 0 ]] ; do arduino-cli upload boiler-smd.ino --port=/dev/serial/by-id/usb-Arduino_UNO_R4_Minima_330A131459313835070F33324B572E41-if00 -b arduino:renesas_uno:minima ; ex=$? ; done  && screen -L -Logfile ~/logs/arduino-$(date +%Y%m%d-%H%M%S).log /dev/serial/by-id/usb-Arduino_UNO_R4_Minima_330A131459313835070F33324B572E41-if00 115200`
